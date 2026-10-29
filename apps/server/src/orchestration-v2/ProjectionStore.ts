@@ -175,6 +175,7 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "lastErrorClass"
   | "latestRunId"
   | "usageLimitResetAt"
+  | "usageLimitRetryAt"
   | "archivedAt"
   | "settledOverride"
   | "pendingRuntimeRequest"
@@ -1653,6 +1654,7 @@ type ShellThreadState = {
   readonly lastErrorClass: OrchestrationV2ThreadShell["lastErrorClass"];
   readonly lastErrorCode: OrchestrationV2ThreadShell["lastErrorCode"];
   readonly usageLimitResetAt: OrchestrationV2ThreadShell["usageLimitResetAt"];
+  readonly usageLimitRetryAt: OrchestrationV2ThreadShell["usageLimitRetryAt"];
   readonly pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
@@ -1814,6 +1816,7 @@ function shellFromState(input: {
     lastErrorClass: input.state.lastErrorClass,
     lastErrorCode: input.state.lastErrorCode,
     usageLimitResetAt: input.state.usageLimitResetAt,
+    usageLimitRetryAt: input.state.usageLimitRetryAt,
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
     latestVisibleMessage: null,
@@ -3813,6 +3816,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         }>`
           SELECT t.payload_json, r.run_id, r.completed_at,
             item.payload_json AS failure_payload_json,
+            COALESCE(
+              json_extract(item.payload_json, '$.failure.resetAt'),
+              CASE WHEN json_extract(item.payload_json, '$.failure.retryable') = 1
+                THEN json_extract(item.payload_json, '$.failure.retryAt') END
+            ) AS recovery_at,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
               -- Keep bindings outermost: one provider instance can hold every session.
@@ -3858,14 +3866,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
-            AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
-            AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
+            AND recovery_at IS NOT NULL
+            AND julianday(recovery_at) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
             AND (
               (
                 json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
-                AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
+                AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS recovery_at
                 AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
-                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                AND julianday(recovery_at) <= julianday(${DateTime.formatIso(options.now)})
                 AND (
                   json_extract(t.payload_json, '$.snoozedUntil') IS NULL
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
@@ -3874,11 +3882,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               OR (
                 (
                   json_extract(t.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
-                  OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
+                  OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT recovery_at
                 )
                 AND (
                   ${booleanInt(options.autoResume)}
-                  OR (${booleanInt(options.snooze)} AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(${DateTime.formatIso(options.now)}))
+                  OR (${booleanInt(options.snooze)} AND julianday(recovery_at) > julianday(${DateTime.formatIso(options.now)}))
                 )
               )
             )
@@ -3902,6 +3910,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             status: "failed",
             lastErrorClass: summary.lastErrorClass,
             usageLimitResetAt: summary.usageLimitResetAt,
+            usageLimitRetryAt: summary.usageLimitRetryAt,
             latestRunId: RunId.make(row.run_id),
             latestRunCompletedAt:
               row.completed_at === null ? null : DateTime.makeUnsafe(row.completed_at),

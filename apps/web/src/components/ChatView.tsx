@@ -2558,6 +2558,7 @@ export default function ChatView(props: ChatViewProps) {
       ? usageLimitRecoveryBannerItem({
           runId: activeThreadShell.latestRun.runId,
           resetAt: serverRuntime.usageLimitResetAt ?? null,
+          retryAt: serverRuntime.usageLimitRetryAt ?? null,
           stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
           recovery: activeThreadShell.limitRecovery ?? null,
           snoozedUntil: activeThreadShell.snoozedUntil,
