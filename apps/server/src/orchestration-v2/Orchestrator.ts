@@ -5675,6 +5675,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Proposed plan ${sourcePlan.id} is not active.`,
       });
     }
+    const carryLimitRecovery = Effect.fn("Orchestrator.carryLimitRecovery")(function* (
+      runId: RunId,
+      occurredAt: DateTime.Utc,
+    ) {
+      if (command.usageLimitContinuationOfRunId === undefined) return;
+      const current = yield* getProjectionWithPendingEvents(command.threadId, events);
+      const recovery = current.thread.limitRecovery;
+      if (!recovery?.autoResume || recovery.runId !== command.usageLimitContinuationOfRunId) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        occurredAt,
+        payload: {
+          ...current.thread,
+          limitRecovery: { ...recovery, runId, requestId: command.commandId },
+          updatedAt: occurredAt,
+        },
+      });
+    });
     const completeSourcePlan = (occurredAt: DateTime.Utc) =>
       sourcePlan === null
         ? Effect.void
@@ -5982,6 +6004,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: run,
       });
+      yield* carryLimitRecovery(runId, now);
       yield* completeSourcePlan(now);
       yield* emitEvent({
         type: "run-attempt.created",
@@ -6391,6 +6414,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: run,
       });
+      yield* carryLimitRecovery(runId, now);
       yield* completeSourcePlan(now);
       yield* emitEvent({
         type: "run-attempt.created",
@@ -7350,6 +7374,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: run,
     });
+    yield* carryLimitRecovery(runId, now);
     yield* completeSourcePlan(now);
     yield* emitEvent({
       type: "run-attempt.created",
@@ -13819,7 +13844,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // Stop or an explicit recovery choice can commit after the sweep reads its candidate.
           if (
             thread.limitRecovery?.runId === input.limitRecovery.runId &&
-            thread.limitRecovery.resetAt === input.limitRecovery.resetAt
+            (thread.limitRecovery.resetAt === input.limitRecovery.resetAt ||
+              !thread.limitRecovery.autoResume)
           )
             return;
           const command = { type: "thread.metadata.update", ...input } as const;

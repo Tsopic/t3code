@@ -3886,6 +3886,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 )
                 AND (
                   ${booleanInt(options.autoResume)}
+                  OR (
+                    json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
+                    AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
+                  )
                   OR (${booleanInt(options.snooze)} AND julianday(recovery_at) > julianday(${DateTime.formatIso(options.now)}))
                 )
               )
