@@ -9425,7 +9425,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   );
             const terminalFailure =
               resultFailure?.class === "usage_limit"
-                ? { ...resultFailure, resetAt: resetAt ?? resultFailure.resetAt ?? null }
+                ? {
+                    ...resultFailure,
+                    resetAt:
+                      resultFailure.retryable === false
+                        ? null
+                        : (resetAt ?? resultFailure.resetAt ?? null),
+                  }
                 : resultFailure;
             yield* finalizeActiveTurn({
               context,

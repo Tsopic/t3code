@@ -6465,11 +6465,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect("restores quota backoff in a fresh adapter and clears it after success", () =>
+  it.effect("restores quota budget in a fresh adapter and clears it after success", () =>
     Effect.gen(function* () {
       let restored: OrchestrationV2ProviderThread | undefined;
       let previousDelay = 0;
-      for (const attempt of [0, 1, 2]) {
+      for (const attempt of [0, 1, 2, 3, 4, 5, 6]) {
         const harness = yield* makeWakeHarness;
         const now = yield* DateTime.now;
         yield* harness.runtime.startTurn(
@@ -6482,12 +6482,27 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
+        if (attempt === 5) {
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "rate_limit_event",
+              rate_limit_info: {
+                status: "rejected",
+                rateLimitType: "five_hour",
+                resetsAt: Math.floor(DateTime.toEpochMillis(now) / 1_000) + 3_600,
+              },
+              uuid: "quota-budget-reset-window",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+        }
         yield* Queue.offer(
           harness.sdkMessages,
           makeResultFrame({
             uuid: `quota-restored-result-${attempt}`,
-            result: attempt === 2 ? "Finished." : "API Error: 503 claude_quota_exhausted: No quota",
-            ...(attempt === 2
+            result: attempt === 6 ? "Finished." : "API Error: 503 claude_quota_exhausted: No quota",
+            ...(attempt === 6
               ? {}
               : { terminalReason: "api_error", isError: true, apiErrorStatus: 503 }),
           }),
@@ -6500,12 +6515,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         restored = yield* decodeProviderThreadJson(
           yield* encodeProviderThreadJson(updated.providerThread),
         );
-        if (attempt < 2) {
+        if (attempt < 6) {
           assert(terminal.status === "failed");
-          const delay = Date.parse(terminal.failure.retryAt!) - DateTime.toEpochMillis(now);
-          assert.isAbove(delay, previousDelay);
-          assert.equal(restored.nativeMetadata?.claudeQuotaRetryCount, attempt + 1);
-          previousDelay = delay;
+          if (attempt === 5) {
+            assert.isFalse(terminal.failure.retryable);
+            assert.notExists(terminal.failure.retryAt);
+            assert.notExists(terminal.failure.resetAt);
+          } else {
+            assert.isTrue(terminal.failure.retryable);
+            const delay = Date.parse(terminal.failure.retryAt!) - DateTime.toEpochMillis(now);
+            if (attempt < 4) assert.isAbove(delay, previousDelay);
+            previousDelay = delay;
+          }
+          assert.equal(restored.nativeMetadata?.claudeQuotaRetryCount, Math.min(5, attempt + 1));
         } else {
           assert.equal(terminal.status, "completed");
           assert.equal(restored.nativeMetadata?.claudeQuotaRetryCount, 0);

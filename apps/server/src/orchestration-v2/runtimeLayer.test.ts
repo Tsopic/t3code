@@ -7800,6 +7800,19 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           commandId: CommandId.make(`recovery:failure:${deadlineKind}:${scenario}`),
           events: [
             {
+              id: EventId.make(`recovery:quota-budget:${deadlineKind}:${scenario}`),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                ...projection.providerThreads[0]!,
+                nativeMetadata: {
+                  ...projection.providerThreads[0]!.nativeMetadata,
+                  claudeQuotaRetryCount: 5,
+                },
+              },
+            },
+            {
               id: EventId.make(`recovery:run:${deadlineKind}:${scenario}`),
               type: "run.updated",
               threadId,
@@ -8206,6 +8219,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         ) {
           yield* orchestrator.dispatch(resume!);
           const resumed = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(resumed.providerThreads[0]?.nativeMetadata?.claudeQuotaRetryCount, 5);
           const continuation = resumed.runs.at(-1)!;
           const firstError = resumed.turnItems.find((item) => item.type === "error")!;
           assert(firstError.type === "error");
@@ -8238,7 +8252,12 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
               createdBy: "user",
               creationSource: "web",
             });
-            failedRun = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+            const manuallyResumed = yield* orchestrator.getThreadProjection(threadId);
+            assert.equal(
+              manuallyResumed.providerThreads[0]?.nativeMetadata?.claudeQuotaRetryCount,
+              0,
+            );
+            failedRun = manuallyResumed.runs.at(-1)!;
           }
           const failedAt = yield* DateTime.now;
           const retryAt = DateTime.formatIso(DateTime.add(failedAt, { minutes: 2 }));

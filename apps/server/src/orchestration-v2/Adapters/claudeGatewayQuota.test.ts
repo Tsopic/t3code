@@ -31,19 +31,46 @@ describe("claudeGatewayQuotaFailure", () => {
     }
   });
 
-  it.each([0, 1, 4, 5, 100, -1, "invalid", NaN])(
-    "bounds fallback backoff for %s attempts",
-    (attempts) => {
-      const error = { code: "claude_quota_unavailable", retry_after_seconds: -1 };
-      const failure = parse(error, attempts);
-      const delay = Date.parse(failure!.retryAt!) - nowMs;
-      expect(delay).toBeGreaterThanOrEqual(60_000);
-      expect(delay).toBeLessThanOrEqual(900_000);
-      expect(parse(error, attempts)).toEqual(failure);
-      if (attempts === 1)
-        expect(delay).toBeGreaterThan(Date.parse(parse(error, 0)!.retryAt!) - nowMs);
-    },
-  );
+  it.each([0, 1, 4, -1, "invalid", NaN])("bounds fallback backoff for %s attempts", (attempts) => {
+    const error = { code: "claude_quota_unavailable", retry_after_seconds: -1 };
+    const failure = parse(error, attempts);
+    const delay = Date.parse(failure!.retryAt!) - nowMs;
+    expect(delay).toBeGreaterThanOrEqual(60_000);
+    expect(delay).toBeLessThanOrEqual(900_000);
+    expect(parse(error, attempts)).toEqual(failure);
+    if (attempts === 1)
+      expect(delay).toBeGreaterThan(Date.parse(parse(error, 0)!.retryAt!) - nowMs);
+  });
+
+  it.each([5, 100])("requires user action after %s persisted quota failures", (attempts) => {
+    const failure = parse(
+      {
+        code: "claude_quota_unavailable",
+        reset_at: "2026-10-29T13:00:00Z",
+        retry_after_seconds: 60,
+      },
+      attempts,
+    );
+    expect(failure?.class).toBe("usage_limit");
+    expect(failure?.code).toBe("claude_quota_unavailable");
+    expect(failure?.retryable).toBe(false);
+    expect(failure?.resetAt).toBeUndefined();
+    expect(failure?.retryAt).toBeUndefined();
+    expect(failure?.message).toContain("Retry manually");
+  });
+
+  it("recovers the plain terminal quota-unavailable result", () => {
+    const failure = claudeGatewayQuotaFailure({
+      result: "API Error: 503 claude_quota_unavailable: Claude candidate quota is unknown",
+      status: 503,
+      completedAt,
+      previousAttempts: 0,
+      identity: "run-plain",
+    });
+    expect(failure?.code).toBe("claude_quota_unavailable");
+    expect(failure?.retryable).toBe(true);
+    expect(Date.parse(failure!.retryAt!)).toBeGreaterThan(nowMs);
+  });
 
   it.each([
     { code: "authentication_failed" },

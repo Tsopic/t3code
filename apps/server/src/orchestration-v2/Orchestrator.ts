@@ -6221,6 +6221,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }
           : {
               ...activeProviderThread,
+              ...(command.usageLimitContinuationOfRunId === undefined &&
+              command.createdBy === "user" &&
+              command.scheduledTaskId === undefined &&
+              (command.manualContinuationOfRunId !== undefined ||
+                command.creationSource === "web" ||
+                command.creationSource === "mobile" ||
+                command.creationSource === "mcp") &&
+              activeProviderThread.nativeMetadata?.claudeQuotaRetryCount
+                ? {
+                    nativeMetadata: {
+                      ...activeProviderThread.nativeMetadata,
+                      claudeQuotaRetryCount: 0,
+                    },
+                  }
+                : {}),
               providerSessionId,
               lastRunOrdinal: ordinal,
               handoffIds: appendContextHandoffId(

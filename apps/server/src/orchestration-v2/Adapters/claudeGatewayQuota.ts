@@ -30,6 +30,19 @@ export function claudeGatewayQuotaFailure(input: {
     code = /^(claude_quota_exhausted|claude_quota_unavailable):/.exec(body)?.[1];
   }
   if (code !== "claude_quota_exhausted" && code !== "claude_quota_unavailable") return null;
+  if (
+    typeof input.previousAttempts === "number" &&
+    Number.isSafeInteger(input.previousAttempts) &&
+    input.previousAttempts >= 5
+  ) {
+    return makeProviderFailure({
+      class: "usage_limit",
+      code,
+      retryable: false,
+      message:
+        "Claude quota recovery stopped after five automatic attempts. Retry manually to continue.",
+    });
+  }
   const now = DateTime.toEpochMillis(input.completedAt);
   const resetMs = typeof reset === "string" ? Date.parse(reset) : NaN;
   const attempts =
